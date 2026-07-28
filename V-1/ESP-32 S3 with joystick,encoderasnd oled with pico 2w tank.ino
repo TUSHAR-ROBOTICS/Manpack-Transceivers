@@ -3,11 +3,11 @@
  * TAS INDUSTRIES - TACTICAL CONTROL MODULE (TCM-1 TX)
  * Hardware: ESP32-S3-N16R8
  * Architecture: Local Wi-Fi Access Point + UDP Broadcast
- * Display: OLED (70% Canvas, Y: 19-62, 100kHz I2C)
+ * Display: OLED (128x64 SH1106, Fast 400kHz Hardware I2C)
  * ==========================================================
  */
 
-#include <Arduino.h>
+#include <Arduino.h> 
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <WiFi.h>
@@ -52,7 +52,6 @@ ControlPacket txData;
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 // ---------------- GLOBAL STATE ----------------
-bool isOledConnected = false;
 volatile int32_t encoderPos = 0;
 volatile uint8_t lastClkState = HIGH;
 
@@ -71,7 +70,7 @@ const int ENCODER_50_PERCENT = 18;
 unsigned long lastOledUpdate  = 0;
 unsigned long lastUdpSend     = 0;
 
-// Track connection globally so ISR & inputs can adjust direction dynamically
+// Dynamic link status tracking
 bool picoIsConnected = false;
 
 // ---------------- ENCODER ISR ----------------
@@ -79,12 +78,8 @@ void IRAM_ATTR readEncoderISR() {
   uint8_t currentClk = digitalRead(PIN_ENC_CLK);
   if (currentClk != lastClkState) {
     bool isClockwise = (digitalRead(PIN_ENC_DT) != currentClk);
-    
-    // Reverse encoder step direction when Pico is connected
-    if (picoIsConnected) {
-      isClockwise = !isClockwise;
-    }
 
+    // FIXED: Consistent direction calculation regardless of connection state
     if (isClockwise) {
       encoderPos++;
     } else {
@@ -129,20 +124,12 @@ void showBootSplash() {
 
 // ---------------- INPUT READING & ALARM ----------------
 void readInputs() {
-  // Update linked client status
+  // Check station connection count
   picoIsConnected = (WiFi.softAPgetStationNum() > 0);
 
-  int rawX = analogRead(PIN_JOY_X);
-  int rawY = analogRead(PIN_JOY_Y);
-
-  // Reverse Joystick Axes when Pico is connected
-  if (picoIsConnected) {
-    joyXRaw = 4095 - rawX;
-    joyYRaw = 4095 - rawY;
-  } else {
-    joyXRaw = rawX;
-    joyYRaw = rawY;
-  }
+  // FIXED: Straight raw ADC readings without dynamic inversion
+  joyXRaw = analogRead(PIN_JOY_X);
+  joyYRaw = analogRead(PIN_JOY_Y);
 
   joyBtnState = (digitalRead(PIN_JOY_SW) == LOW);
 
@@ -190,8 +177,9 @@ void setup() {
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, LOW);
 
+  // Initialize I2C Bus at 400kHz
   Wire.begin(PIN_OLED_SDA, PIN_OLED_SCL);
-  Wire.setClock(100000);
+  Wire.setClock(400000);
   u8g2.begin();
 
   lastClkState = digitalRead(PIN_ENC_CLK);
@@ -219,18 +207,18 @@ void renderDashboard() {
   u8g2.print(encPct);
   u8g2.print("%");
 
-  // Status Indicator Text & Dynamic Connection Dot
+  // Visual status indicators
   if (picoIsConnected) {
     u8g2.drawStr(96, 27, "LINK");
-    u8g2.drawDisc(122, 24, 2); // Filled Dot when Pico is Connected
+    u8g2.drawDisc(122, 24, 2);   // Solid dot = Connected
   } else {
     u8g2.drawStr(96, 27, "WAIT");
-    u8g2.drawCircle(122, 24, 2); // Hollow Dot when Disconnected
+    u8g2.drawCircle(122, 24, 2); // Hollow dot = Waiting
   }
 
   u8g2.drawHLine(0, 29, 128);
 
-  // Left Panel: Reticle Target Box
+  // Panel 1: Reticle Target
   int boxX = 6, boxY = 31, boxSize = 31; 
   drawCornerBrackets(boxX, boxY, boxSize, boxSize, 4);
 
@@ -245,7 +233,7 @@ void renderDashboard() {
 
   if (joyBtnState) u8g2.drawDisc(dotX, dotY, 2);
 
-  // Middle Panel: Telemetry
+  // Panel 2: Numeric Telemetry
   u8g2.setFont(u8g2_font_5x7_tf);
   u8g2.setCursor(44, 38);
   u8g2.print("X:");
@@ -270,7 +258,7 @@ void renderDashboard() {
     u8g2.drawStr(45, 62, "NORMAL");
   }
 
-  // Right Panel: Radar Dial
+  // Panel 3: Radar Dial
   int dialCx = 104, dialCy = 46, dialR = 15;
   u8g2.drawCircle(dialCx, dialCy, dialR);
 
